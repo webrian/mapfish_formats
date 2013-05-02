@@ -81,6 +81,13 @@ class FormatsProtocol(Protocol):
                 filter = create_default_filter(request, self.mapped_class)
             return self._plot_histogram(request, self.Session.query(self.mapped_class).filter(filter), kwargs['categories'])
 
+        if format == 'xls':
+
+            metadata = kwargs.get("metadata", None)
+
+            query = self._query(request, filter, False)
+            return self._read_xls(request, query, filter=filter, metadata=metadata)
+
         if format == 'shp':
 
             epsg = kwargs.get("epsg", 4326)
@@ -217,6 +224,43 @@ class FormatsProtocol(Protocol):
 
         return f
 
+    def _read_xls(self, request, query, ** kwargs):
+
+        requested_attrs = request.params.get("attrs").split(",")
+
+        workbook = xlwt.Workbook(encoding='utf-8')
+        sheet = workbook.add_sheet("data")
+        
+        row = 0
+        column = 0
+        for a in requested_attrs:
+            sheet.write(row, column, a)
+            column += 1
+
+        row += 1
+        
+        for i in query.all():
+            column = 0
+            for a in requested_attrs:
+                sheet.write(row, column, getattr(i, a))
+                column += 1
+
+            row += 1
+        
+        if kwargs.get("metadata", None) is not None:
+
+            self._write_metadata(workbook, kwargs.get("metadata"))
+            # Write the workbook to a file-like object
+            xls = StringIO()
+            # Save the workbook to the memory object
+            workbook.save(xls)
+
+        # Create a file-like object
+        s = StringIO()
+        # Save the workbook to the memory object
+        workbook.save(s)
+        return s
+
     def _read_shp(self, request, query, ** kwargs):
 
         requested_attrs = request.params.get("attrs").split(",")
@@ -346,9 +390,14 @@ class FormatsProtocol(Protocol):
 
         # Write contact address
         for a in metadata.get_address():
+            row += 1
+            sheet.write(row, 0, "*************************************************************")
+            row += 1
             column = 0
             for c in a:
-                sheet.write(row, column, c)
-                column += 1
+                sheet.write(row, 0, c)
+                row += 1
+            
+            sheet.write(row, 0, "*************************************************************")
 
             row += 1
