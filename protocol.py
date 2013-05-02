@@ -1,7 +1,20 @@
-#! /usr/bin/python
-
-# To change this template, choose Tools | Templates
-# and open the template in the editor.
+#
+# mapnik_formats
+# Copyright (C) 2013 Centre for Development and Environment, University of Bern
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
 
 __author__ = "Adrian Weber, Centre for Development and Environment, University of Bern"
 __date__ = "$Apr 29, 2013 6:55:21 AM$"
@@ -22,6 +35,7 @@ except ImportError:
     from io import BytesIO as StringIO
 from zipfile import ZIP_DEFLATED
 from zipfile import ZipFile
+import xlwt
 
 
 # Map of EPSG codes to write the .prj files
@@ -71,6 +85,8 @@ class FormatsProtocol(Protocol):
 
             epsg = kwargs.get("epsg", 4326)
 
+            metadata = kwargs.get("metadata", None)
+
             if filter is None:
                 filter = create_default_filter(request, self.mapped_class)
 
@@ -79,7 +95,7 @@ class FormatsProtocol(Protocol):
             for attr in request.params.get("attrs").split(","):
                 mapped_attributes.append(getattr(self.mapped_class, attr))
 
-            return self._read_shp(request, self.Session.query(* mapped_attributes).filter(filter), epsg=epsg)
+            return self._read_shp(request, self.Session.query(* mapped_attributes).filter(filter), epsg=epsg, metadata=metadata)
 
     def _read_ext(self, request, query, filter=None, name_mapping=None):
         """
@@ -179,7 +195,7 @@ class FormatsProtocol(Protocol):
             x = robjects.IntVector(v)
 
             x.names = robjects.StrVector(names)
-            r.barplot(x, col=bar_color, xlab=str(), ylab=str(), main=str()) #, ** {"names.arg": robjects.StrVector(names)})
+            r.barplot(x, col=bar_color, xlab=str(), ylab=str(), main=str(), ** {"names.arg": robjects.StrVector(names)})
             #r.par(bg="#F0F0F0", mar=robjects.FloatVector([1.5, 1.5, 1.5, 1.5]))
             #r.pie(x, labels=robjects.StrVector(names), clockwise=True)
 
@@ -201,7 +217,7 @@ class FormatsProtocol(Protocol):
 
         return f
 
-    def _read_shp(self, request, query, **kwargs):
+    def _read_shp(self, request, query, ** kwargs):
 
         requested_attrs = request.params.get("attrs").split(",")
 
@@ -284,8 +300,55 @@ class FormatsProtocol(Protocol):
         f.writestr("data.cpg", cpg.getvalue())
         f.writestr("data.prj", prj.getvalue())
 
+
+        if kwargs.get("metadata") is not None:
+            wb = xlwt.Workbook(encoding='utf-8')
+
+            self._write_metadata(wb, kwargs.get("metadata"))
+            # Write the workbook to a file-like object
+            xls = StringIO()
+            # Save the workbook to the memory object
+            wb.save(xls)
+
+            f.writestr("metadata.xls", xls.getvalue())
+
         # Close the zip file
         f.close()
 
         # And return the content
         return s
+
+    def _write_metadata(self, workbook, metadata):
+
+        sheet = workbook.add_sheet("metadata")
+
+        row = 0
+
+        # Create a style that draws a bottom line
+        bottomMediumStlye = xlwt.easyxf('font: bold true; borders: bottom THIN;')
+
+        # Write the column headers
+        column = 0
+        for h in metadata.get_headers():
+            sheet.write(row, column, h, bottomMediumStlye)
+            column += 1
+            
+        row += 1
+
+        # Write the variable metadata
+        for r in metadata.get_rows():
+            column = 0
+            for c in r:
+                sheet.write(row, column, c)
+                column += 1
+
+            row += 1
+
+        # Write contact address
+        for a in metadata.get_address():
+            column = 0
+            for c in a:
+                sheet.write(row, column, c)
+                column += 1
+
+            row += 1
