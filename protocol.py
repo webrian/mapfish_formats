@@ -234,7 +234,7 @@ class FormatsProtocol(Protocol):
         row = 0
         column = 0
         for a in requested_attrs:
-            sheet.write(row, column, a)
+            sheet.write(row, column, a, xlwt.easyxf('font: bold true; borders: bottom THIN;'))
             column += 1
 
         row += 1
@@ -389,15 +389,21 @@ class FormatsProtocol(Protocol):
             row += 1
 
         # Write contact address
-        for a in metadata.get_address():
+        if metadata.get_address() is not None:
+            # One row as space
             row += 1
             sheet.write(row, 0, "*************************************************************")
+            row += 1
+            sheet.write(row, 0, "*")
+            sheet.write(row, 1, "Points of Contact", xlwt.easyxf('font: bold true;'))
+            row += 1
+            sheet.write(row, 0, "*************************************************************")
+
+        for a in metadata.get_address():
             row += 1
             column = 0
             for c in a:
-                sheet.write(row, 0, c)
+                sheet.write(row, 0, "*")
+                sheet.write(row, 1, c)
                 row += 1
-            
             sheet.write(row, 0, "*************************************************************")
-
-            row += 1
