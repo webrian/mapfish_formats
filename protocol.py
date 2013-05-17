@@ -271,6 +271,17 @@ class FormatsProtocol(Protocol):
         # Get the first feature to guess the datatype
         first_record = query.first()
 
+        # Create geometry from AsBinary query
+        first_geom = loads(str(getattr(first_record, 'geometry_column')))
+
+        log.debug("Geometry type is %s" % first_geom.geom_type)
+
+        w = shapefile.Writer(shapefile.POLYGON)
+        if first_geom.geom_type == "Point":
+            w = shapefile.Writer(shapefile.POINT)
+        elif first_geom.geom_type == "LineString":
+            w = shapefile.Writer(shapefile.POLYLINE)
+
         # Loop all requested attributes
         for attr in requested_attrs:
 
@@ -292,6 +303,22 @@ class FormatsProtocol(Protocol):
             # Create geometry from AsBinary query
             g = loads(str(getattr(i, 'geometry_column')))
 
+            # Handle point geometries
+            if g.geom_type == "Point":
+
+                w.point(g.coords[0][0], g.coords[0][1])
+
+            # Handle linestring geometries
+            if g.geom_type == "LineString":
+
+                point_list = []
+
+                for p in g.coords:
+                    point_list.append([p[0], p[1]])
+
+                w.line(parts=[point_list])
+
+            # Handle polygon geometries
             if g.geom_type == "Polygon":
 
                 ring_list = []
