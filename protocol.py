@@ -341,14 +341,14 @@ class FormatsProtocol(Protocol):
 
                 w.poly(shapeType=shapefile.POLYGON, parts=ring_list)
 
-                values = []
-                for v in requested_attrs:
-                    try:
-                        values.append(str(getattr(i, v)))
-                    except UnicodeEncodeError:
-                        values.append(str(getattr(i, v).encode("UTF-8")))
-                
-                w.record(* values)
+            values = []
+            for v in requested_attrs:
+                try:
+                    values.append(str(getattr(i, v)))
+                except UnicodeEncodeError:
+                    values.append(str(getattr(i, v).encode("UTF-8")))
+
+            w.record(* values)
 
         # Create the required files and fill them
         shp = StringIO()
