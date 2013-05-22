@@ -171,16 +171,24 @@ class FormatsProtocol(Protocol):
         except ValueError:
             width = defaultSide
 
-        rbreaks = 10
-        if 'breaks' in request.params:
-            rbreaks = int(request.params['breaks'])
+        mappedAttribute = getattr(self.mapped_class, attr)
+
+        # Get the number of distinct values
+        distinct_value = query.distinct(mappedAttribute).count()
+
+        # Limit the breaks to 100
+        if distinct_value > 100:
+            distinct_value = 100
+        # In case of less distinct values, limit the number of breaks
+        elif distinct_value > 20 and distinct_value < 100:
+            distinct_value = int(distinct_value/2)
+
+        rbreaks = int(request.params.get("breaks", distinct_value))
 
         rinterface.initr()
 
         r = robjects.r
         r.library('grDevices')
-
-        mappedAttribute = getattr(self.mapped_class, attr)
 
         # Create a temporary file
         file = NamedTemporaryFile()
