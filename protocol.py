@@ -19,6 +19,7 @@
 __author__ = "Adrian Weber, Centre for Development and Environment, University of Bern"
 __date__ = "$Apr 29, 2013 6:55:21 AM$"
 
+import Image
 from geoalchemy import functions
 import geojson
 from mapfish.protocol import *
@@ -36,6 +37,12 @@ except ImportError:
 from zipfile import ZIP_DEFLATED
 from zipfile import ZipFile
 import xlwt
+import matplotlib
+matplotlib.use("Agg")
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.mlab as mlab
+from matplotlib.font_manager import FontProperties
 
 
 # Map of EPSG codes to write the .prj files
@@ -79,7 +86,11 @@ class FormatsProtocol(Protocol):
         if format == 'hist':
             if filter is None:
                 filter = create_default_filter(request, self.mapped_class)
-            return self._plot_histogram(request, self.Session.query(self.mapped_class).filter(filter), kwargs['categories'])
+
+            renderer = self._plot_histogram_matplotlib
+            if "renderer" in request.params and request.params.get("renderer") == "r":
+                renderer = self._plot_histogram_matplotlib
+            return renderer(request, self.Session.query(self.mapped_class).filter(filter), ** kwargs)
 
         if format == 'xls':
 
@@ -154,8 +165,106 @@ class FormatsProtocol(Protocol):
 
         return json.dumps(output)
 
+    def _plot_histogram_matplotlib(self, request, query, ** kwargs):
+        """
+        Alternative implementation with matplotlib instead of R
+        """
 
-    def _plot_histogram(self, request, query, categories=None):
+        # Get the first requested attribute
+        attr = request.params.get('attrs').split(",")[0]
+
+        # Set a default value for the image size in pixel
+        defaultSide = 480.0
+        # Set the dpi
+        dpi = 96.0
+
+        try:
+            height = float(request.params.get("height", defaultSide))
+        except ValueError:
+            height = defaultSide
+        try:
+            width = float(request.params.get("width", defaultSide))
+        except ValueError:
+            width = defaultSide
+
+        mappedAttribute = getattr(self.mapped_class, attr)
+        
+        fig = plt.figure(figsize=(width/dpi,height/dpi))
+        ax = fig.add_subplot(111)
+
+        # Set fontProperties
+        fontProperties = FontProperties(family="sans-serif", size='x-small')
+
+        # If categories is not none, then the current attribute has categories and
+        # we want to draw a barplot instead of a histogram
+        if kwargs["categories"] is not None:
+            
+            categories = kwargs["categories"]
+
+            v = []
+            names = []
+            for a, count in query.from_self(mappedAttribute, func.count(mappedAttribute)).filter(mappedAttribute.in_(categories.keys())).group_by(mappedAttribute):
+                v.append(int(count))
+                names.append(categories[unicode(a)].encode('UTF-8'))
+
+            N = len(v)
+
+            ind = range(N)
+
+            # the histogram of the data
+            ax.bar(np.array(ind)+0.1, v, width=0.8, color=kwargs.get("color"))
+                
+            # hist uses np.histogram under the hood to create 'n' and 'bins'.
+            # np.histogram returns the bin edges, so there will be 50 probability
+            # density values in n, 51 bin edges in bins and 50 patches.  To get
+            # everything lined up, we'll compute the bin centers
+            ax.set_xticks(np.arange(len(v)) + 0.5)
+            ax.set_xticklabels(names)
+
+        else:
+
+            # Get the number of distinct values
+            distinct_value = query.distinct(mappedAttribute).count()
+
+            # Limit the breaks to 100
+            if distinct_value > 100:
+                distinct_value = 100
+            # In case of less distinct values, limit the number of breaks
+            elif distinct_value > 20 and distinct_value < 100:
+                distinct_value = int(distinct_value / 2)
+
+            v = []
+            for i in query.all():
+                v.append(getattr(i, attr))
+
+            # the histogram of the data
+            n, bins, patches = ax.hist(v, bins=distinct_value, facecolor=kwargs.get("color"), alpha=0.75)
+
+            # hist uses np.histogram under the hood to create 'n' and 'bins'.
+            # np.histogram returns the bin edges, so there will be 50 probability
+            # density values in n, 51 bin edges in bins and 50 patches.  To get
+            # everything lined up, we'll compute the bin centers
+
+        if 'xlabel' in kwargs:
+            ax.set_xlabel(kwargs['xlabel'], fontproperties=fontProperties)
+        if 'ylabel' in kwargs:
+            ax.set_ylabel(kwargs['ylabel'], fontproperties=fontProperties)
+
+        # Set smaller fonts
+        [i.set_fontproperties(fontProperties) for i in ax.get_yticklabels()]
+        [j.set_fontproperties(fontProperties) for j in ax.get_xticklabels()]
+        ax.grid(True)
+
+        file = StringIO()
+
+        fig.savefig(file, dpi=dpi, format="png")
+
+        file.seek(0)  # rewind the data
+
+        return file
+
+
+    def _plot_histogram_r(self, request, query, ** kwargs):
 
         # Get the requested attribute
         attr = request.params.get('attrs').split(",")[0]
@@ -181,7 +290,7 @@ class FormatsProtocol(Protocol):
             distinct_value = 100
         # In case of less distinct values, limit the number of breaks
         elif distinct_value > 20 and distinct_value < 100:
-            distinct_value = int(distinct_value/2)
+            distinct_value = int(distinct_value / 2)
 
         rbreaks = int(request.params.get("breaks", distinct_value))
 
@@ -199,7 +308,9 @@ class FormatsProtocol(Protocol):
 
         # If categories is not none, then the current attribute has categories and
         # we want to draw a barplot instead of a histogram
-        if categories is not None:
+        if kwargs["categories"] is not None:
+
+            categories = kwargs["categories"]
 
             names = []
             v = []
