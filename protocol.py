@@ -19,7 +19,8 @@
 __author__ = "Adrian Weber, Centre for Development and Environment, University of Bern"
 __date__ = "$Apr 29, 2013 6:55:21 AM$"
 
-import Image
+import timeit
+from time import time
 from geoalchemy import functions
 import geojson
 from mapfish.protocol import *
@@ -89,7 +90,7 @@ class FormatsProtocol(Protocol):
 
             renderer = self._plot_histogram_matplotlib
             if "renderer" in request.params and request.params.get("renderer") == "r":
-                renderer = self._plot_histogram_matplotlib
+                renderer = self._plot_histogram_r
             return renderer(request, self.Session.query(self.mapped_class).filter(filter), ** kwargs)
 
         if format == 'xls':
@@ -170,6 +171,11 @@ class FormatsProtocol(Protocol):
         Alternative implementation with matplotlib instead of R
         """
 
+        if "log" in kwargs:
+            log = kwargs["log"]
+
+        start = time()
+
         # Get the first requested attribute
         attr = request.params.get('attrs').split(",")[0]
 
@@ -195,11 +201,17 @@ class FormatsProtocol(Protocol):
         # Set fontProperties
         fontProperties = FontProperties(family="sans-serif", size='x-small')
 
+        # Set smaller fonts
+        [i.set_fontproperties(fontProperties) for i in ax.get_yticklabels()]
+        [j.set_fontproperties(fontProperties) for j in ax.get_xticklabels()]
+        
         # If categories is not none, then the current attribute has categories and
         # we want to draw a barplot instead of a histogram
         if kwargs["categories"] is not None:
             
             categories = kwargs["categories"]
+
+            beforeQuery = time()
 
             v = []
             names = []
@@ -207,12 +219,18 @@ class FormatsProtocol(Protocol):
                 v.append(int(count))
                 names.append(categories[unicode(a)].encode('UTF-8'))
 
+            log.debug("SQL query took: %ss" % (time()-beforeQuery))
+
             N = len(v)
 
             ind = range(N)
 
+            beforeBar = time()
+
             # the histogram of the data
             ax.bar(np.array(ind)+0.1, v, width=0.8, color=kwargs.get("color"))
+
+            log.debug("ax.bar took: %ss" % (time() - beforeBar))
                 
             # hist uses np.histogram under the hood to create 'n' and 'bins'.
             # np.histogram returns the bin edges, so there will be 50 probability
@@ -224,7 +242,7 @@ class FormatsProtocol(Protocol):
         else:
 
             # Get the number of distinct values
-            distinct_value = query.distinct(mappedAttribute).count()
+            distinct_value = query.from_self(mappedAttribute).distinct(mappedAttribute).count()
 
             # Limit the breaks to 100
             if distinct_value > 100:
@@ -233,12 +251,51 @@ class FormatsProtocol(Protocol):
             elif distinct_value > 20 and distinct_value < 100:
                 distinct_value = int(distinct_value / 2)
 
-            v = []
-            for i in query.all():
-                v.append(getattr(i, attr))
+            beforeQuery = time()
+
+            v = [i for i, in query.from_self(mappedAttribute).all()]
+
+            log.debug("SQL query took: %ss" % (time() - beforeQuery))
+
+            beforeHist = time()
 
             # the histogram of the data
             n, bins, patches = ax.hist(v, bins=distinct_value, facecolor=kwargs.get("color"), alpha=0.75)
+
+            """
+            n, bins = np.histogram(v, distinct_value)
+
+            # get the corners of the rectangles for the histogram
+            left = np.array(bins[:-1])
+            right = np.array(bins[1:])
+            bottom = np.zeros(len(left))
+            top = bottom + n
+            nrects = len(left)
+
+            nverts = nrects*(1+3+1)
+            verts = np.zeros((nverts, 2))
+            codes = np.ones(nverts, int) * matplotlib.path.Path.LINETO
+            codes[0::5] = matplotlib.path.Path.MOVETO
+            codes[4::5] = matplotlib.path.Path.CLOSEPOLY
+            verts[0::5,0] = left
+            verts[0::5,1] = bottom
+            verts[1::5,0] = left
+            verts[1::5,1] = top
+            verts[2::5,0] = right
+            verts[2::5,1] = top
+            verts[3::5,0] = right
+            verts[3::5,1] = bottom
+
+            barpath = matplotlib.path.Path(verts, codes)
+            patch = matplotlib.patches.PathPatch(barpath, facecolor=kwargs.get("color"), alpha=0.75)
+            ax.add_patch(patch)
+
+            ax.set_xlim(0, right[-1])
+            ax.set_ylim(bottom.min(), top.max())
+            """
+
+
+            log.debug("ax.hist took: %ss" % (time() - beforeHist))
 
             # hist uses np.histogram under the hood to create 'n' and 'bins'.
             # np.histogram returns the bin edges, so there will be 50 probability
@@ -250,21 +307,33 @@ class FormatsProtocol(Protocol):
         if 'ylabel' in kwargs:
             ax.set_ylabel(kwargs['ylabel'], fontproperties=fontProperties)
 
-        # Set smaller fonts
-        [i.set_fontproperties(fontProperties) for i in ax.get_yticklabels()]
-        [j.set_fontproperties(fontProperties) for j in ax.get_xticklabels()]
+
         ax.grid(True)
 
-        file = StringIO()
+        beforeFile = time()
 
-        fig.savefig(file, dpi=dpi, format="png")
+        if "filename" in kwargs:
+            file = open("filename", 'wb')
+            fig.savefig(kwargs["filename"], dpi=dpi, format="png")
+        else:
+            file = StringIO()
+            fig.savefig(file, dpi=dpi, format="png")
 
         file.seek(0)  # rewind the data
+
+        log.debug("Save to file took: %ss" % (time() - beforeFile))
+
+        log.debug("_plot_histogram_matplotlib took: %ss" %  (time() - start))
 
         return file
 
 
     def _plot_histogram_r(self, request, query, ** kwargs):
+
+        if "log" in kwargs:
+            log = kwargs["log"]
+
+        start = time()
 
         # Get the requested attribute
         attr = request.params.get('attrs').split(",")[0]
@@ -282,25 +351,20 @@ class FormatsProtocol(Protocol):
 
         mappedAttribute = getattr(self.mapped_class, attr)
 
-        # Get the number of distinct values
-        distinct_value = query.distinct(mappedAttribute).count()
-
-        # Limit the breaks to 100
-        if distinct_value > 100:
-            distinct_value = 100
-        # In case of less distinct values, limit the number of breaks
-        elif distinct_value > 20 and distinct_value < 100:
-            distinct_value = int(distinct_value / 2)
-
-        rbreaks = int(request.params.get("breaks", distinct_value))
+        beforeR = time()
 
         rinterface.initr()
 
         r = robjects.r
         r.library('grDevices')
 
-        # Create a temporary file
-        file = NamedTemporaryFile()
+        log.debug("R starting took: %ss" % (time() - beforeR))
+
+        if 'filename' in kwargs:
+            file = open(kwargs['filename'], 'wb')
+        else:
+            # Create a temporary file
+            file = NamedTemporaryFile()
         r.png(file.name, width=width, height=height)
         r.par(bg="#F0F0F0", mar=robjects.FloatVector([2.6, 4.1, 3.1, 1.1]))
 
@@ -312,40 +376,70 @@ class FormatsProtocol(Protocol):
 
             categories = kwargs["categories"]
 
+            beforeDistinct = time()
+
             names = []
             v = []
-            #for i in self.Session.query(func.count(mappedAttribute)).filter(mappedAttribute.in_(keys)).group_by(mappedAttribute):
             for a, count in query.from_self(mappedAttribute, func.count(mappedAttribute)).filter(mappedAttribute.in_(categories.keys())).group_by(mappedAttribute):
                 v.append(int(count))
                 names.append(categories[unicode(a)].encode('UTF-8'))
-            x = robjects.IntVector(v)
+            
+            log.debug("Distinct query took: %ss" % (time() - beforeDistinct))
 
+            x = robjects.IntVector(v)
             x.names = robjects.StrVector(names)
+
+            beforePlot = time()
+
             r.barplot(x, col=bar_color, xlab=str(), ylab=str(), main=str(), ** {"names.arg": robjects.StrVector(names)})
             #r.par(bg="#F0F0F0", mar=robjects.FloatVector([1.5, 1.5, 1.5, 1.5]))
             #r.pie(x, labels=robjects.StrVector(names), clockwise=True)
 
+            log.debug("r.barplot took: %ss" % (time() - beforePlot))
+
         # Handle quantitative data
         else:
 
-            v = []
-            for i in query.all():
-                v.append(getattr(i, attr))
+            # Get the number of distinct values
+            distinct_value = query.from_self(mappedAttribute).distinct(mappedAttribute).count()
+
+            # Limit the breaks to 100
+            if distinct_value > 100:
+                distinct_value = 100
+            # In case of less distinct values, limit the number of breaks
+            elif distinct_value > 20 and distinct_value < 100:
+                distinct_value = int(distinct_value / 2)
+
+            rbreaks = int(request.params.get("breaks", distinct_value))
+
+            beforeQuery = time()
+
+            v = [i for i, in query.from_self(mappedAttribute).all()]
+
+            log.debug("SQL query took: %ss" % (time() - beforeQuery))
 
             x = robjects.FloatVector(v)
 
+            beforeHist = time()
+
             r.hist(x, col=bar_color, breaks=rbreaks, ylab=str(), xlab=str(), main=str())
+
+            log.debug("r.hist took: %ss" % (time() - beforeHist))
 
         # Finish drawing
         r('dev.off()')
 
         f = open(file.name, 'r')
 
+        log.debug("_plot_histogram_r took: %ss" % (time() - start))
+
         return f
 
     def _read_xls(self, request, query, ** kwargs):
 
-        requested_attrs = request.params.get("attrs").split(",")
+        requested_attrs = request.params["attrs"].split(",")
+
+        mappedAttributes = [getattr(self.mapped_class, i) for i in requested_attrs]
 
         workbook = xlwt.Workbook(encoding='utf-8')
         sheet = workbook.add_sheet("data")
@@ -358,17 +452,18 @@ class FormatsProtocol(Protocol):
 
         row += 1
         
-        for i in query.all():
+        for i in query.from_self(*mappedAttributes).all():
             column = 0
-            for a in requested_attrs:
-                sheet.write(row, column, getattr(i, a))
+            #for a in requested_attrs:
+            for attribute in i:
+                sheet.write(row, column, attribute)
                 column += 1
 
             row += 1
         
-        if kwargs.get("metadata", None) is not None:
+        if "metadata" in kwargs:
 
-            self._write_metadata(workbook, kwargs.get("metadata"))
+            self._write_metadata(workbook, kwargs["metadata"])
             # Write the workbook to a file-like object
             xls = StringIO()
             # Save the workbook to the memory object
@@ -382,7 +477,7 @@ class FormatsProtocol(Protocol):
 
     def _read_shp(self, request, query, ** kwargs):
 
-        requested_attrs = request.params.get("attrs").split(",")
+        requested_attrs = request.params["attrs"].split(",")
 
         w = shapefile.Writer(shapefile.POLYGON)
         w.autoBalance = 1
