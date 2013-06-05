@@ -22,3 +22,4 @@ Prerequisites
 * [xlwt](http://www.python-excel.org/) for spreadsheet support
 * [Python Shapefile Library](https://code.google.com/p/pyshp/) for Shapefile support
 * [R](http://www.r-project.org/) and [RPy2](http://rpy.sourceforge.net/rpy2.html) for histograms and barplots
+* [Matplotlib](http://matplotlib.org/) for histograms and barplots as an alternative renderer to the R renderer
