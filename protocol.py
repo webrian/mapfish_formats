@@ -19,7 +19,6 @@
 __author__ = "Adrian Weber, Centre for Development and Environment, University of Bern"
 __date__ = "$Apr 29, 2013 6:55:21 AM$"
 
-import timeit
 from time import time
 from geoalchemy import functions
 import geojson
@@ -32,9 +31,9 @@ import simplejson as json
 from sqlalchemy import func
 from tempfile import NamedTemporaryFile
 try:
-    from StringIO import StringIO
+    from cStringIO import StringIO
 except ImportError:
-    from io import BytesIO as StringIO
+    from StringIO import StringIO
 from zipfile import ZIP_DEFLATED
 from zipfile import ZipFile
 import xlwt
@@ -95,10 +94,8 @@ class FormatsProtocol(Protocol):
 
         if format == 'xls':
 
-            metadata = kwargs.get("metadata", None)
-
             query = self._query(request, filter, False)
-            return self._read_xls(request, query, filter=filter, metadata=metadata)
+            return self._read_xls(request, query, filter=filter, ** kwargs)
 
         if format == 'shp':
 
@@ -114,7 +111,7 @@ class FormatsProtocol(Protocol):
             for attr in request.params.get("attrs").split(","):
                 mapped_attributes.append(getattr(self.mapped_class, attr))
 
-            return self._read_shp(request, self.Session.query(* mapped_attributes).filter(filter), epsg=epsg, metadata=metadata)
+            return self._read_shp(request, self.Session.query(* mapped_attributes).filter(filter), epsg=epsg, ** kwargs)
 
     def _read_ext(self, request, query, filter=None, name_mapping=None):
         """
@@ -195,7 +192,7 @@ class FormatsProtocol(Protocol):
 
         mappedAttribute = getattr(self.mapped_class, attr)
         
-        fig = plt.figure(figsize=(width/dpi,height/dpi))
+        fig = plt.figure(figsize=(width / dpi, height / dpi))
         ax = fig.add_subplot(111)
 
         # Set fontProperties
@@ -228,7 +225,7 @@ class FormatsProtocol(Protocol):
             beforeBar = time()
 
             # the histogram of the data
-            ax.bar(np.array(ind)+0.1, v, width=0.8, color=kwargs.get("color"))
+            ax.bar(np.array(ind) + 0.1, v, width=0.8, color=kwargs.get("color"))
 
             log.debug("ax.bar took: %ss" % (time() - beforeBar))
                 
@@ -323,7 +320,7 @@ class FormatsProtocol(Protocol):
 
         log.debug("Save to file took: %ss" % (time() - beforeFile))
 
-        log.debug("_plot_histogram_matplotlib took: %ss" %  (time() - start))
+        log.debug("_plot_histogram_matplotlib took: %ss" % (time() - start))
 
         return file
 
@@ -437,20 +434,31 @@ class FormatsProtocol(Protocol):
 
     def _read_xls(self, request, query, ** kwargs):
 
+        if "log" in kwargs:
+            log = kwargs["log"]
+
         requested_attrs = request.params["attrs"].split(",")
 
         mappedAttributes = [getattr(self.mapped_class, i) for i in requested_attrs]
 
+        beforeWorkbook = time()
+
         workbook = xlwt.Workbook(encoding='utf-8')
         sheet = workbook.add_sheet("data")
+
+        log.debug("Create a workbook took: %ss" % (time() - beforeWorkbook))
+        
+        default_header = xlwt.easyxf('font: bold true; borders: bottom THIN;')
         
         row = 0
         column = 0
         for a in requested_attrs:
-            sheet.write(row, column, a, xlwt.easyxf('font: bold true; borders: bottom THIN;'))
+            sheet.write(row, column, a, default_header)
             column += 1
 
         row += 1
+
+        beforeRows = time()
         
         for i in query.from_self(*mappedAttributes).all():
             column = 0
@@ -460,6 +468,10 @@ class FormatsProtocol(Protocol):
                 column += 1
 
             row += 1
+
+        log.debug("Writing rows took: %ss" % (time() - beforeRows))
+
+        beforeMetadata = time()
         
         if "metadata" in kwargs:
 
@@ -469,18 +481,26 @@ class FormatsProtocol(Protocol):
             # Save the workbook to the memory object
             workbook.save(xls)
 
-        # Create a file-like object
-        s = StringIO()
+        log.debug("Writing metadata took: %ss" % (time() - beforeMetadata))
+
+        beforeSave = time()
+
+        if "filename" in kwargs:
+            s = open(kwargs["filename"], "wb")
+        else:
+            # Create a file-like object
+            s = StringIO()
         # Save the workbook to the memory object
         workbook.save(s)
+        log.debug("Saving took: %ss" % (time() - beforeSave))
         return s
 
     def _read_shp(self, request, query, ** kwargs):
 
-        requested_attrs = request.params["attrs"].split(",")
+        if "log" in kwargs:
+            log = kwargs["log"]
 
-        w = shapefile.Writer(shapefile.POLYGON)
-        w.autoBalance = 1
+        requested_attrs = request.params["attrs"].split(",")
 
         # Get the first feature to guess the datatype
         first_record = query.first()
@@ -495,6 +515,7 @@ class FormatsProtocol(Protocol):
             w = shapefile.Writer(shapefile.POINT)
         elif first_geom.geom_type == "LineString":
             w = shapefile.Writer(shapefile.POLYLINE)
+        w.autoBalance = 1
 
         # Loop all requested attributes
         for attr in requested_attrs:
@@ -508,6 +529,8 @@ class FormatsProtocol(Protocol):
                 w.field(str(attr), 'N', 40, 10)
             else:
                 w.field(str(attr), 'C', 40)
+
+        beforeWriteFeatures = time()
 
         # Now query all features
         for i in query.all():
@@ -523,7 +546,7 @@ class FormatsProtocol(Protocol):
                 w.point(g.coords[0][0], g.coords[0][1])
 
             # Handle linestring geometries
-            if g.geom_type == "LineString":
+            elif g.geom_type == "LineString":
 
                 point_list = []
 
@@ -533,25 +556,19 @@ class FormatsProtocol(Protocol):
                 w.line(parts=[point_list])
 
             # Handle polygon geometries
-            if g.geom_type == "Polygon":
+            elif g.geom_type == "Polygon":
 
                 ring_list = []
 
-                point_list = []
+                exterior_ring = [[j[0], j[1]] for j in g.exterior.coords]
 
-                for j in g.exterior.coords:
-                    point_list.append([j[0], j[1]])
-
-                ring_list.append(point_list)
+                ring_list.append(exterior_ring)
 
                 for interior in g.interiors:
 
-                    point_list = []
+                    interior_ring = [[k[0], k[1]] for k in interior.coords]
 
-                    for k in interior.coords:
-                        point_list.append([k[0], k[1]])
-
-                    ring_list.append(point_list)
+                    ring_list.append(interior_ring)
 
                 w.poly(shapeType=shapefile.POLYGON, parts=ring_list)
 
@@ -563,6 +580,10 @@ class FormatsProtocol(Protocol):
                     values.append(str(getattr(i, v).encode("UTF-8")))
 
             w.record(* values)
+            
+        log.debug("Writing all features took: %ss" % (time() - beforeWriteFeatures))
+
+        beforeSave = time()
 
         # Create the required files and fill them
         shp = StringIO()
@@ -576,8 +597,14 @@ class FormatsProtocol(Protocol):
         cpg.write("UTF-8")
         prj.write(epsg_code[kwargs.get("epsg", 4326)])
 
+        log.debug("Overall saving took: %ss" % (time() - beforeSave))
+
         # Create a memory file-like deflated zip file
-        s = StringIO()
+        if "filename" in kwargs:
+            s = open(kwargs["filename"], "wb")
+        else:
+            # Create a file-like object
+            s = StringIO()
         f = ZipFile(s, 'w', ZIP_DEFLATED)
         f.writestr("data.shp", shp.getvalue())
         f.writestr("data.dbf", dbf.getvalue())
@@ -585,17 +612,20 @@ class FormatsProtocol(Protocol):
         f.writestr("data.cpg", cpg.getvalue())
         f.writestr("data.prj", prj.getvalue())
 
+        beforeMetadata = time()
 
-        if kwargs.get("metadata") is not None:
+        if "metadata" in kwargs:
             wb = xlwt.Workbook(encoding='utf-8')
 
-            self._write_metadata(wb, kwargs.get("metadata"))
+            self._write_metadata(wb, kwargs["metadata"])
             # Write the workbook to a file-like object
             xls = StringIO()
             # Save the workbook to the memory object
             wb.save(xls)
 
             f.writestr("metadata.xls", xls.getvalue())
+
+        log.debug("Metadata took: %ss" % (time() - beforeMetadata))
 
         # Close the zip file
         f.close()
