@@ -19,6 +19,7 @@
 __author__ = "Adrian Weber, Centre for Development and Environment, University of Bern"
 __date__ = "$Apr 29, 2013 6:55:21 AM$"
 
+from time import time
 from geoalchemy import functions
 import geojson
 from mapfish.protocol import *
@@ -30,12 +31,18 @@ import simplejson as json
 from sqlalchemy import func
 from tempfile import NamedTemporaryFile
 try:
-    from StringIO import StringIO
+    from cStringIO import StringIO
 except ImportError:
-    from io import BytesIO as StringIO
+    from StringIO import StringIO
 from zipfile import ZIP_DEFLATED
 from zipfile import ZipFile
 import xlwt
+import matplotlib
+matplotlib.use("Agg")
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.mlab as mlab
+from matplotlib.font_manager import FontProperties
 
 
 # Map of EPSG codes to write the .prj files
@@ -79,14 +86,16 @@ class FormatsProtocol(Protocol):
         if format == 'hist':
             if filter is None:
                 filter = create_default_filter(request, self.mapped_class)
-            return self._plot_histogram(request, self.Session.query(self.mapped_class).filter(filter), kwargs['categories'])
+
+            renderer = self._plot_histogram_matplotlib
+            if "renderer" in request.params and request.params.get("renderer") == "r":
+                renderer = self._plot_histogram_r
+            return renderer(request, self.Session.query(self.mapped_class).filter(filter), ** kwargs)
 
         if format == 'xls':
 
-            metadata = kwargs.get("metadata", None)
-
             query = self._query(request, filter, False)
-            return self._read_xls(request, query, filter=filter, metadata=metadata)
+            return self._read_xls(request, query, filter=filter, ** kwargs)
 
         if format == 'shp':
 
@@ -102,7 +111,7 @@ class FormatsProtocol(Protocol):
             for attr in request.params.get("attrs").split(","):
                 mapped_attributes.append(getattr(self.mapped_class, attr))
 
-            return self._read_shp(request, self.Session.query(* mapped_attributes).filter(filter), epsg=epsg, metadata=metadata)
+            return self._read_shp(request, self.Session.query(* mapped_attributes).filter(filter), epsg=epsg, ** kwargs)
 
     def _read_ext(self, request, query, filter=None, name_mapping=None):
         """
@@ -154,8 +163,174 @@ class FormatsProtocol(Protocol):
 
         return json.dumps(output)
 
+    def _plot_histogram_matplotlib(self, request, query, ** kwargs):
+        """
+        Alternative implementation with matplotlib instead of R
+        """
 
-    def _plot_histogram(self, request, query, categories=None):
+        if "log" in kwargs:
+            log = kwargs["log"]
+
+        start = time()
+
+        # Get the first requested attribute
+        attr = request.params.get('attrs').split(",")[0]
+
+        # Set a default value for the image size in pixel
+        defaultSide = 480.0
+        # Set the dpi
+        dpi = 96.0
+
+        try:
+            height = float(request.params.get("height", defaultSide))
+        except ValueError:
+            height = defaultSide
+        try:
+            width = float(request.params.get("width", defaultSide))
+        except ValueError:
+            width = defaultSide
+
+        mappedAttribute = getattr(self.mapped_class, attr)
+        
+        fig = plt.figure(figsize=(width / dpi, height / dpi))
+        ax = fig.add_subplot(111)
+
+        # Set fontProperties
+        fontProperties = FontProperties(family="sans-serif", size='x-small')
+
+        # Set smaller fonts
+        [i.set_fontproperties(fontProperties) for i in ax.get_yticklabels()]
+        [j.set_fontproperties(fontProperties) for j in ax.get_xticklabels()]
+        
+        # If categories is not none, then the current attribute has categories and
+        # we want to draw a barplot instead of a histogram
+        if kwargs["categories"] is not None:
+            
+            categories = kwargs["categories"]
+
+            beforeQuery = time()
+
+            v = []
+            names = []
+            for a, count in query.from_self(mappedAttribute, func.count(mappedAttribute)).filter(mappedAttribute.in_(categories.keys())).group_by(mappedAttribute):
+                v.append(int(count))
+                names.append(categories[unicode(a)].encode('UTF-8'))
+
+            log.debug("SQL query took: %ss" % (time()-beforeQuery))
+
+            N = len(v)
+
+            ind = range(N)
+
+            beforeBar = time()
+
+            # the histogram of the data
+            ax.bar(np.array(ind) + 0.1, v, width=0.8, color=kwargs.get("color"))
+
+            log.debug("ax.bar took: %ss" % (time() - beforeBar))
+                
+            # hist uses np.histogram under the hood to create 'n' and 'bins'.
+            # np.histogram returns the bin edges, so there will be 50 probability
+            # density values in n, 51 bin edges in bins and 50 patches.  To get
+            # everything lined up, we'll compute the bin centers
+            ax.set_xticks(np.arange(len(v)) + 0.5)
+            ax.set_xticklabels(names)
+
+        else:
+
+            # Get the number of distinct values
+            distinct_value = query.from_self(mappedAttribute).distinct(mappedAttribute).count()
+
+            # Limit the breaks to 100
+            if distinct_value > 100:
+                distinct_value = 100
+            # In case of less distinct values, limit the number of breaks
+            elif distinct_value > 20 and distinct_value < 100:
+                distinct_value = int(distinct_value / 2)
+
+            beforeQuery = time()
+
+            v = [i for i, in query.from_self(mappedAttribute).all()]
+
+            log.debug("SQL query took: %ss" % (time() - beforeQuery))
+
+            beforeHist = time()
+
+            # the histogram of the data
+            n, bins, patches = ax.hist(v, bins=distinct_value, facecolor=kwargs.get("color"), alpha=0.75)
+
+            """
+            n, bins = np.histogram(v, distinct_value)
+
+            # get the corners of the rectangles for the histogram
+            left = np.array(bins[:-1])
+            right = np.array(bins[1:])
+            bottom = np.zeros(len(left))
+            top = bottom + n
+            nrects = len(left)
+
+            nverts = nrects*(1+3+1)
+            verts = np.zeros((nverts, 2))
+            codes = np.ones(nverts, int) * matplotlib.path.Path.LINETO
+            codes[0::5] = matplotlib.path.Path.MOVETO
+            codes[4::5] = matplotlib.path.Path.CLOSEPOLY
+            verts[0::5,0] = left
+            verts[0::5,1] = bottom
+            verts[1::5,0] = left
+            verts[1::5,1] = top
+            verts[2::5,0] = right
+            verts[2::5,1] = top
+            verts[3::5,0] = right
+            verts[3::5,1] = bottom
+
+            barpath = matplotlib.path.Path(verts, codes)
+            patch = matplotlib.patches.PathPatch(barpath, facecolor=kwargs.get("color"), alpha=0.75)
+            ax.add_patch(patch)
+
+            ax.set_xlim(0, right[-1])
+            ax.set_ylim(bottom.min(), top.max())
+            """
+
+
+            log.debug("ax.hist took: %ss" % (time() - beforeHist))
+
+            # hist uses np.histogram under the hood to create 'n' and 'bins'.
+            # np.histogram returns the bin edges, so there will be 50 probability
+            # density values in n, 51 bin edges in bins and 50 patches.  To get
+            # everything lined up, we'll compute the bin centers
+
+        if 'xlabel' in kwargs:
+            ax.set_xlabel(kwargs['xlabel'], fontproperties=fontProperties)
+        if 'ylabel' in kwargs:
+            ax.set_ylabel(kwargs['ylabel'], fontproperties=fontProperties)
+
+
+        ax.grid(True)
+
+        beforeFile = time()
+
+        if "filename" in kwargs:
+            file = open("filename", 'wb')
+            fig.savefig(kwargs["filename"], dpi=dpi, format="png")
+        else:
+            file = StringIO()
+            fig.savefig(file, dpi=dpi, format="png")
+
+        file.seek(0)  # rewind the data
+
+        log.debug("Save to file took: %ss" % (time() - beforeFile))
+
+        log.debug("_plot_histogram_matplotlib took: %ss" % (time() - start))
+
+        return file
+
+
+    def _plot_histogram_r(self, request, query, ** kwargs):
+
+        if "log" in kwargs:
+            log = kwargs["log"]
+
+        start = time()
 
         # Get the requested attribute
         attr = request.params.get('attrs').split(",")[0]
@@ -173,25 +348,20 @@ class FormatsProtocol(Protocol):
 
         mappedAttribute = getattr(self.mapped_class, attr)
 
-        # Get the number of distinct values
-        distinct_value = query.distinct(mappedAttribute).count()
-
-        # Limit the breaks to 100
-        if distinct_value > 100:
-            distinct_value = 100
-        # In case of less distinct values, limit the number of breaks
-        elif distinct_value > 20 and distinct_value < 100:
-            distinct_value = int(distinct_value/2)
-
-        rbreaks = int(request.params.get("breaks", distinct_value))
+        beforeR = time()
 
         rinterface.initr()
 
         r = robjects.r
         r.library('grDevices')
 
-        # Create a temporary file
-        file = NamedTemporaryFile()
+        log.debug("R starting took: %ss" % (time() - beforeR))
+
+        if 'filename' in kwargs:
+            file = open(kwargs['filename'], 'wb')
+        else:
+            # Create a temporary file
+            file = NamedTemporaryFile()
         r.png(file.name, width=width, height=height)
         r.par(bg="#F0F0F0", mar=robjects.FloatVector([2.6, 4.1, 3.1, 1.1]))
 
@@ -199,82 +369,138 @@ class FormatsProtocol(Protocol):
 
         # If categories is not none, then the current attribute has categories and
         # we want to draw a barplot instead of a histogram
-        if categories is not None:
+        if kwargs["categories"] is not None:
+
+            categories = kwargs["categories"]
+
+            beforeDistinct = time()
 
             names = []
             v = []
-            #for i in self.Session.query(func.count(mappedAttribute)).filter(mappedAttribute.in_(keys)).group_by(mappedAttribute):
             for a, count in query.from_self(mappedAttribute, func.count(mappedAttribute)).filter(mappedAttribute.in_(categories.keys())).group_by(mappedAttribute):
                 v.append(int(count))
                 names.append(categories[unicode(a)].encode('UTF-8'))
-            x = robjects.IntVector(v)
+            
+            log.debug("Distinct query took: %ss" % (time() - beforeDistinct))
 
+            x = robjects.IntVector(v)
             x.names = robjects.StrVector(names)
+
+            beforePlot = time()
+
             r.barplot(x, col=bar_color, xlab=str(), ylab=str(), main=str(), ** {"names.arg": robjects.StrVector(names)})
             #r.par(bg="#F0F0F0", mar=robjects.FloatVector([1.5, 1.5, 1.5, 1.5]))
             #r.pie(x, labels=robjects.StrVector(names), clockwise=True)
 
+            log.debug("r.barplot took: %ss" % (time() - beforePlot))
+
         # Handle quantitative data
         else:
 
-            v = []
-            for i in query.all():
-                v.append(getattr(i, attr))
+            # Get the number of distinct values
+            distinct_value = query.from_self(mappedAttribute).distinct(mappedAttribute).count()
+
+            # Limit the breaks to 100
+            if distinct_value > 100:
+                distinct_value = 100
+            # In case of less distinct values, limit the number of breaks
+            elif distinct_value > 20 and distinct_value < 100:
+                distinct_value = int(distinct_value / 2)
+
+            rbreaks = int(request.params.get("breaks", distinct_value))
+
+            beforeQuery = time()
+
+            v = [i for i, in query.from_self(mappedAttribute).all()]
+
+            log.debug("SQL query took: %ss" % (time() - beforeQuery))
 
             x = robjects.FloatVector(v)
 
+            beforeHist = time()
+
             r.hist(x, col=bar_color, breaks=rbreaks, ylab=str(), xlab=str(), main=str())
+
+            log.debug("r.hist took: %ss" % (time() - beforeHist))
 
         # Finish drawing
         r('dev.off()')
 
         f = open(file.name, 'r')
 
+        log.debug("_plot_histogram_r took: %ss" % (time() - start))
+
         return f
 
     def _read_xls(self, request, query, ** kwargs):
 
-        requested_attrs = request.params.get("attrs").split(",")
+        if "log" in kwargs:
+            log = kwargs["log"]
+
+        requested_attrs = request.params["attrs"].split(",")
+
+        mappedAttributes = [getattr(self.mapped_class, i) for i in requested_attrs]
+
+        beforeWorkbook = time()
 
         workbook = xlwt.Workbook(encoding='utf-8')
         sheet = workbook.add_sheet("data")
+
+        log.debug("Create a workbook took: %ss" % (time() - beforeWorkbook))
+        
+        default_header = xlwt.easyxf('font: bold true; borders: bottom THIN;')
         
         row = 0
         column = 0
         for a in requested_attrs:
-            sheet.write(row, column, a, xlwt.easyxf('font: bold true; borders: bottom THIN;'))
+            sheet.write(row, column, a, default_header)
             column += 1
 
         row += 1
+
+        beforeRows = time()
         
-        for i in query.all():
+        for i in query.from_self(*mappedAttributes).all():
             column = 0
-            for a in requested_attrs:
-                sheet.write(row, column, getattr(i, a))
+            #for a in requested_attrs:
+            for attribute in i:
+                sheet.write(row, column, attribute)
                 column += 1
 
             row += 1
-        
-        if kwargs.get("metadata", None) is not None:
 
-            self._write_metadata(workbook, kwargs.get("metadata"))
+        log.debug("Writing rows took: %ss" % (time() - beforeRows))
+
+        beforeMetadata = time()
+        
+        if "metadata" in kwargs:
+
+            self._write_metadata(workbook, kwargs["metadata"])
             # Write the workbook to a file-like object
             xls = StringIO()
             # Save the workbook to the memory object
             workbook.save(xls)
 
-        # Create a file-like object
-        s = StringIO()
+        log.debug("Writing metadata took: %ss" % (time() - beforeMetadata))
+
+        beforeSave = time()
+
+        if "filename" in kwargs:
+            s = open(kwargs["filename"], "wb")
+        else:
+            # Create a file-like object
+            s = StringIO()
         # Save the workbook to the memory object
         workbook.save(s)
+        log.debug("Saving took: %ss" % (time() - beforeSave))
         return s
 
     def _read_shp(self, request, query, ** kwargs):
 
-        requested_attrs = request.params.get("attrs").split(",")
+        if "log" in kwargs:
+            log = kwargs["log"]
 
-        w = shapefile.Writer(shapefile.POLYGON)
-        w.autoBalance = 1
+        requested_attrs = request.params["attrs"].split(",")
 
         # Get the first feature to guess the datatype
         first_record = query.first()
@@ -289,6 +515,7 @@ class FormatsProtocol(Protocol):
             w = shapefile.Writer(shapefile.POINT)
         elif first_geom.geom_type == "LineString":
             w = shapefile.Writer(shapefile.POLYLINE)
+        w.autoBalance = 1
 
         # Loop all requested attributes
         for attr in requested_attrs:
@@ -302,6 +529,8 @@ class FormatsProtocol(Protocol):
                 w.field(str(attr), 'N', 40, 10)
             else:
                 w.field(str(attr), 'C', 40)
+
+        beforeWriteFeatures = time()
 
         # Now query all features
         for i in query.all():
@@ -317,7 +546,7 @@ class FormatsProtocol(Protocol):
                 w.point(g.coords[0][0], g.coords[0][1])
 
             # Handle linestring geometries
-            if g.geom_type == "LineString":
+            elif g.geom_type == "LineString":
 
                 point_list = []
 
@@ -327,25 +556,19 @@ class FormatsProtocol(Protocol):
                 w.line(parts=[point_list])
 
             # Handle polygon geometries
-            if g.geom_type == "Polygon":
+            elif g.geom_type == "Polygon":
 
                 ring_list = []
 
-                point_list = []
+                exterior_ring = [[j[0], j[1]] for j in g.exterior.coords]
 
-                for j in g.exterior.coords:
-                    point_list.append([j[0], j[1]])
-
-                ring_list.append(point_list)
+                ring_list.append(exterior_ring)
 
                 for interior in g.interiors:
 
-                    point_list = []
+                    interior_ring = [[k[0], k[1]] for k in interior.coords]
 
-                    for k in interior.coords:
-                        point_list.append([k[0], k[1]])
-
-                    ring_list.append(point_list)
+                    ring_list.append(interior_ring)
 
                 w.poly(shapeType=shapefile.POLYGON, parts=ring_list)
 
@@ -357,6 +580,10 @@ class FormatsProtocol(Protocol):
                     values.append(str(getattr(i, v).encode("UTF-8")))
 
             w.record(* values)
+            
+        log.debug("Writing all features took: %ss" % (time() - beforeWriteFeatures))
+
+        beforeSave = time()
 
         # Create the required files and fill them
         shp = StringIO()
@@ -370,8 +597,14 @@ class FormatsProtocol(Protocol):
         cpg.write("UTF-8")
         prj.write(epsg_code[kwargs.get("epsg", 4326)])
 
+        log.debug("Overall saving took: %ss" % (time() - beforeSave))
+
         # Create a memory file-like deflated zip file
-        s = StringIO()
+        if "filename" in kwargs:
+            s = open(kwargs["filename"], "wb")
+        else:
+            # Create a file-like object
+            s = StringIO()
         f = ZipFile(s, 'w', ZIP_DEFLATED)
         f.writestr("data.shp", shp.getvalue())
         f.writestr("data.dbf", dbf.getvalue())
@@ -379,17 +612,20 @@ class FormatsProtocol(Protocol):
         f.writestr("data.cpg", cpg.getvalue())
         f.writestr("data.prj", prj.getvalue())
 
+        beforeMetadata = time()
 
-        if kwargs.get("metadata") is not None:
+        if "metadata" in kwargs:
             wb = xlwt.Workbook(encoding='utf-8')
 
-            self._write_metadata(wb, kwargs.get("metadata"))
+            self._write_metadata(wb, kwargs["metadata"])
             # Write the workbook to a file-like object
             xls = StringIO()
             # Save the workbook to the memory object
             wb.save(xls)
 
             f.writestr("metadata.xls", xls.getvalue())
+
+        log.debug("Metadata took: %ss" % (time() - beforeMetadata))
 
         # Close the zip file
         f.close()
