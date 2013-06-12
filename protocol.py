@@ -252,7 +252,10 @@ class FormatsProtocol(Protocol):
 
             v = [i for i, in query.from_self(mappedAttribute).all()]
 
-            log.debug("SQL query took: %ss" % (time() - beforeQuery))
+            try:
+                log.debug("SQL query took: %ss" % (time() - beforeQuery))
+            except UnboundLocalError:
+                pass
 
             beforeHist = time()
 
@@ -291,9 +294,6 @@ class FormatsProtocol(Protocol):
             ax.set_ylim(bottom.min(), top.max())
             """
 
-
-            log.debug("ax.hist took: %ss" % (time() - beforeHist))
-
             # hist uses np.histogram under the hood to create 'n' and 'bins'.
             # np.histogram returns the bin edges, so there will be 50 probability
             # density values in n, 51 bin edges in bins and 50 patches.  To get
@@ -317,10 +317,6 @@ class FormatsProtocol(Protocol):
             fig.savefig(file, dpi=dpi, format="png")
 
         file.seek(0)  # rewind the data
-
-        log.debug("Save to file took: %ss" % (time() - beforeFile))
-
-        log.debug("_plot_histogram_matplotlib took: %ss" % (time() - start))
 
         return file
 
