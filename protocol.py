@@ -19,7 +19,6 @@
 __author__ = "Adrian Weber, Centre for Development and Environment, University of Bern"
 __date__ = "$Apr 29, 2013 6:55:21 AM$"
 
-from time import time
 from geoalchemy import functions
 import geojson
 from mapfish.protocol import *
@@ -168,11 +167,6 @@ class FormatsProtocol(Protocol):
         Alternative implementation with matplotlib instead of R
         """
 
-        if "log" in kwargs:
-            log = kwargs["log"]
-
-        start = time()
-
         # Get the first requested attribute
         attr = request.params.get('attrs').split(",")[0]
 
@@ -208,27 +202,19 @@ class FormatsProtocol(Protocol):
             
             categories = kwargs["categories"]
 
-            beforeQuery = time()
-
             v = []
             names = []
             for a, count in query.from_self(mappedAttribute, func.count(mappedAttribute)).filter(mappedAttribute.in_(categories.keys())).group_by(mappedAttribute):
                 v.append(int(count))
                 names.append(categories[unicode(a)].encode('UTF-8'))
 
-            log.debug("SQL query took: %ss" % (time()-beforeQuery))
-
             N = len(v)
 
             ind = range(N)
 
-            beforeBar = time()
-
             # the histogram of the data
             ax.bar(np.array(ind) + 0.1, v, width=0.8, color=kwargs.get("color"))
 
-            log.debug("ax.bar took: %ss" % (time() - beforeBar))
-                
             # hist uses np.histogram under the hood to create 'n' and 'bins'.
             # np.histogram returns the bin edges, so there will be 50 probability
             # density values in n, 51 bin edges in bins and 50 patches.  To get
@@ -248,16 +234,7 @@ class FormatsProtocol(Protocol):
             elif distinct_value > 20 and distinct_value < 100:
                 distinct_value = int(distinct_value / 2)
 
-            beforeQuery = time()
-
             v = [i for i, in query.from_self(mappedAttribute).all()]
-
-            try:
-                log.debug("SQL query took: %ss" % (time() - beforeQuery))
-            except UnboundLocalError:
-                pass
-
-            beforeHist = time()
 
             # the histogram of the data
             n, bins, patches = ax.hist(v, bins=distinct_value, facecolor=kwargs.get("color"), alpha=0.75)
@@ -307,8 +284,6 @@ class FormatsProtocol(Protocol):
 
         ax.grid(True)
 
-        beforeFile = time()
-
         if "filename" in kwargs:
             file = open("filename", 'wb')
             fig.savefig(kwargs["filename"], dpi=dpi, format="png")
@@ -322,11 +297,6 @@ class FormatsProtocol(Protocol):
 
 
     def _plot_histogram_r(self, request, query, ** kwargs):
-
-        if "log" in kwargs:
-            log = kwargs["log"]
-
-        start = time()
 
         # Get the requested attribute
         attr = request.params.get('attrs').split(",")[0]
@@ -344,14 +314,10 @@ class FormatsProtocol(Protocol):
 
         mappedAttribute = getattr(self.mapped_class, attr)
 
-        beforeR = time()
-
         rinterface.initr()
 
         r = robjects.r
         r.library('grDevices')
-
-        log.debug("R starting took: %ss" % (time() - beforeR))
 
         if 'filename' in kwargs:
             file = open(kwargs['filename'], 'wb')
@@ -369,26 +335,18 @@ class FormatsProtocol(Protocol):
 
             categories = kwargs["categories"]
 
-            beforeDistinct = time()
-
             names = []
             v = []
             for a, count in query.from_self(mappedAttribute, func.count(mappedAttribute)).filter(mappedAttribute.in_(categories.keys())).group_by(mappedAttribute):
                 v.append(int(count))
                 names.append(categories[unicode(a)].encode('UTF-8'))
             
-            log.debug("Distinct query took: %ss" % (time() - beforeDistinct))
-
             x = robjects.IntVector(v)
             x.names = robjects.StrVector(names)
-
-            beforePlot = time()
 
             r.barplot(x, col=bar_color, xlab=str(), ylab=str(), main=str(), ** {"names.arg": robjects.StrVector(names)})
             #r.par(bg="#F0F0F0", mar=robjects.FloatVector([1.5, 1.5, 1.5, 1.5]))
             #r.pie(x, labels=robjects.StrVector(names), clockwise=True)
-
-            log.debug("r.barplot took: %ss" % (time() - beforePlot))
 
         # Handle quantitative data
         else:
@@ -405,45 +363,28 @@ class FormatsProtocol(Protocol):
 
             rbreaks = int(request.params.get("breaks", distinct_value))
 
-            beforeQuery = time()
-
             v = [i for i, in query.from_self(mappedAttribute).all()]
-
-            log.debug("SQL query took: %ss" % (time() - beforeQuery))
 
             x = robjects.FloatVector(v)
 
-            beforeHist = time()
-
             r.hist(x, col=bar_color, breaks=rbreaks, ylab=str(), xlab=str(), main=str())
-
-            log.debug("r.hist took: %ss" % (time() - beforeHist))
 
         # Finish drawing
         r('dev.off()')
 
         f = open(file.name, 'r')
 
-        log.debug("_plot_histogram_r took: %ss" % (time() - start))
-
         return f
 
     def _read_xls(self, request, query, ** kwargs):
-
-        if "log" in kwargs:
-            log = kwargs["log"]
 
         requested_attrs = request.params["attrs"].split(",")
 
         mappedAttributes = [getattr(self.mapped_class, i) for i in requested_attrs]
 
-        beforeWorkbook = time()
-
         workbook = xlwt.Workbook(encoding='utf-8')
         sheet = workbook.add_sheet("data")
 
-        log.debug("Create a workbook took: %ss" % (time() - beforeWorkbook))
-        
         default_header = xlwt.easyxf('font: bold true; borders: bottom THIN;')
         
         row = 0
@@ -454,8 +395,6 @@ class FormatsProtocol(Protocol):
 
         row += 1
 
-        beforeRows = time()
-        
         for i in query.from_self(*mappedAttributes).all():
             column = 0
             #for a in requested_attrs:
@@ -465,10 +404,6 @@ class FormatsProtocol(Protocol):
 
             row += 1
 
-        log.debug("Writing rows took: %ss" % (time() - beforeRows))
-
-        beforeMetadata = time()
-        
         if "metadata" in kwargs:
 
             self._write_metadata(workbook, kwargs["metadata"])
@@ -477,10 +412,6 @@ class FormatsProtocol(Protocol):
             # Save the workbook to the memory object
             workbook.save(xls)
 
-        log.debug("Writing metadata took: %ss" % (time() - beforeMetadata))
-
-        beforeSave = time()
-
         if "filename" in kwargs:
             s = open(kwargs["filename"], "wb")
         else:
@@ -488,13 +419,9 @@ class FormatsProtocol(Protocol):
             s = StringIO()
         # Save the workbook to the memory object
         workbook.save(s)
-        log.debug("Saving took: %ss" % (time() - beforeSave))
         return s
 
     def _read_shp(self, request, query, ** kwargs):
-
-        if "log" in kwargs:
-            log = kwargs["log"]
 
         requested_attrs = request.params["attrs"].split(",")
 
@@ -503,8 +430,6 @@ class FormatsProtocol(Protocol):
 
         # Create geometry from AsBinary query
         first_geom = loads(str(getattr(first_record, 'geometry_column')))
-
-        log.debug("Geometry type is %s" % first_geom.geom_type)
 
         w = shapefile.Writer(shapefile.POLYGON)
         if first_geom.geom_type == "Point":
@@ -525,8 +450,6 @@ class FormatsProtocol(Protocol):
                 w.field(str(attr), 'N', 40, 10)
             else:
                 w.field(str(attr), 'C', 40)
-
-        beforeWriteFeatures = time()
 
         # Now query all features
         for i in query.all():
@@ -577,10 +500,6 @@ class FormatsProtocol(Protocol):
 
             w.record(* values)
             
-        log.debug("Writing all features took: %ss" % (time() - beforeWriteFeatures))
-
-        beforeSave = time()
-
         # Create the required files and fill them
         shp = StringIO()
         shx = StringIO()
@@ -592,8 +511,6 @@ class FormatsProtocol(Protocol):
         w.saveDbf(dbf)
         cpg.write("UTF-8")
         prj.write(epsg_code[kwargs.get("epsg", 4326)])
-
-        log.debug("Overall saving took: %ss" % (time() - beforeSave))
 
         # Create a memory file-like deflated zip file
         if "filename" in kwargs:
@@ -608,8 +525,6 @@ class FormatsProtocol(Protocol):
         f.writestr("data.cpg", cpg.getvalue())
         f.writestr("data.prj", prj.getvalue())
 
-        beforeMetadata = time()
-
         if "metadata" in kwargs:
             wb = xlwt.Workbook(encoding='utf-8')
 
@@ -620,8 +535,6 @@ class FormatsProtocol(Protocol):
             wb.save(xls)
 
             f.writestr("metadata.xls", xls.getvalue())
-
-        log.debug("Metadata took: %ss" % (time() - beforeMetadata))
 
         # Close the zip file
         f.close()
