@@ -61,19 +61,12 @@ class FormatsProtocol(Protocol):
 
         if format == 'geojson':
 
-            ret = None
             if id is not None:
-                o = self.Session.query(self.mapped_class).get(id)
-                if o is None:
-                    abort(404)
-                ret = self._filter_attrs(o.toFeature(), request)
+                query = self.Session.query(self.mapped_class).get(id)
             else:
-                objs = self._query(request, filter)
-                ret = FeatureCollection(
-                                        [self._filter_attrs(o.toFeature(), request) \
-                                        for o in objs])
-
-            return geojson.dumps(ret)
+                query = self._query(request, filter, False)
+            name_mapping=kwargs['name_mapping'] if 'name_mapping' in kwargs else None
+            return self._read_geojson(request, query, filter=filter, name_mapping=name_mapping)
 
         if format == 'ext':
             if id is not None:
@@ -111,6 +104,39 @@ class FormatsProtocol(Protocol):
                 mapped_attributes.append(getattr(self.mapped_class, attr))
 
             return self._read_shp(request, self.Session.query(* mapped_attributes).filter(filter), epsg=epsg, ** kwargs)
+
+    def _read_geojson(self, request, query, filter=None, name_mapping=None):
+        """
+        Output GeoJSON format
+        """
+
+        ret = None
+        if query.count() == 1:
+            o = query.first()
+            if o is None:
+                abort(404)
+            ret = self._filter_attrs(o.toFeature(), request)
+        else:
+            ret = FeatureCollection(
+                                    [self._filter_attrs(o.toFeature(), request) \
+                                    for o in query.all()])
+
+        def _replace_mapping(feature):
+            """
+            Replacing code keys with better understandable keys
+            """
+            for p in feature.properties.keys():
+                if p in name_mapping:
+                    feature.properties[name_mapping[p]] = feature.properties[p]
+                    del feature.properties[p]
+            return feature
+
+        if hasattr(ret, "properties"):
+            ret = _replace_mapping(ret)
+        else:
+            ret = FeatureCollection([_replace_mapping(feature) for feature in ret.features])
+
+        return geojson.dumps(ret)
 
     def _read_ext(self, request, query, filter=None, name_mapping=None):
         """
