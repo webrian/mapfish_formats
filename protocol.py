@@ -146,13 +146,14 @@ class FormatsProtocol(Protocol):
         output['totalResults'] = self.count(request, filter)
 
         attrs = request.params['attrs'].split(',')
+        mappedAttributes = [getattr(self.mapped_class, i) for i in attrs]
 
         output['metaData'] = {'totalProperty': 'totalResults', 'root': 'rows'}
         output['metaData']['fields'] = []
 
         output['rows'] = []
 
-        for i in query.all():
+        for i in query.from_self(*mappedAttributes).all():
             row = {}
             for k in attrs:
                 value = getattr(i, k)
