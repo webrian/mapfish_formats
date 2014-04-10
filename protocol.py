@@ -613,3 +613,31 @@ class FormatsProtocol(Protocol):
                 sheet.write(row, 1, c)
                 row += 1
             sheet.write(row, 0, "*************************************************************")
+
+
+    def _get_order_by(self, request):
+        """ Return an SA order_by """
+        column_name = None
+        raw_value = None
+        if 'sort' in request.params:
+            raw_value = request.params['sort']
+            column_name = raw_value.split("#")[0]
+        elif 'order_by' in request.params:
+            raw_value = request.params['order_by']
+            column_name = raw_value.split("#")[0]
+
+        if column_name and column_name in self.mapped_class.__table__.c:
+            column = self.mapped_class.__table__.c[column_name]
+            if 'dir' in request.params and request.params['dir'].upper() == 'DESC':
+                return desc(column)
+            elif len(raw_value.split("#")) > 1:
+                dir = raw_value.split("#")[1]
+                if dir.upper() == "DESC":
+                    return desc(column)
+                else:
+                    return asc(column)
+            else:
+                return asc(column)
+
+        else:
+            return None
