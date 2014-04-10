@@ -26,7 +26,6 @@ import shapefile
 from shapely.wkb import loads
 import simplejson as json
 from sqlalchemy import func
-from tempfile import NamedTemporaryFile
 try:
     from cStringIO import StringIO
 except ImportError:
@@ -38,7 +37,6 @@ import matplotlib
 matplotlib.use("Agg")
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.mlab as mlab
 from matplotlib.font_manager import FontProperties
 
 
