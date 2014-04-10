@@ -63,8 +63,7 @@ class FormatsProtocol(Protocol):
                 query = self.Session.query(self.mapped_class).get(id)
             else:
                 query = self._query(request, filter, False)
-            name_mapping=kwargs['name_mapping'] if 'name_mapping' in kwargs else None
-            return self._read_geojson(request, query, filter=filter, name_mapping=name_mapping)
+            return self._read_geojson(request, query, filter=filter, name_mapping=kwargs.get("name_mapping", {}))
 
         if format == 'ext':
             if id is not None:
@@ -103,7 +102,7 @@ class FormatsProtocol(Protocol):
 
             return self._read_shp(request, self.Session.query(* mapped_attributes).filter(filter), epsg=epsg, ** kwargs)
 
-    def _read_geojson(self, request, query, filter=None, name_mapping=None):
+    def _read_geojson(self, request, query, filter=None, name_mapping={}):
         """
         Output GeoJSON format
         """
@@ -145,13 +144,14 @@ class FormatsProtocol(Protocol):
         output['totalResults'] = self.count(request, filter)
 
         attrs = request.params['attrs'].split(',')
+        mappedAttributes = [getattr(self.mapped_class, i) for i in attrs]
 
         output['metaData'] = {'totalProperty': 'totalResults', 'root': 'rows'}
         output['metaData']['fields'] = []
 
         output['rows'] = []
 
-        for i in query.all():
+        for i in query.from_self(*mappedAttributes).all():
             row = {}
             for k in attrs:
                 value = getattr(i, k)
