@@ -22,8 +22,6 @@ __date__ = "$Apr 29, 2013 6:55:21 AM$"
 from geoalchemy import functions
 import geojson
 from mapfish.protocol import *
-import rpy2.rinterface as rinterface
-import rpy2.robjects as robjects
 import shapefile
 from shapely.wkb import loads
 import simplejson as json
@@ -321,7 +319,8 @@ class FormatsProtocol(Protocol):
 
         return file
 
-
+    """
+    @deprecated
     def _plot_histogram_r(self, request, query, ** kwargs):
 
         # Get the requested attribute
@@ -401,6 +400,8 @@ class FormatsProtocol(Protocol):
         f = open(file.name, 'r')
 
         return f
+    """
+
 
     def _read_xls(self, request, query, ** kwargs):
 
