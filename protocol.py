@@ -307,7 +307,7 @@ class FormatsProtocol(Protocol):
         ax.grid(True)
 
         if "filename" in kwargs:
-            file = open("filename", 'wb')
+            file = open(kwargs["filename"], 'wb')
             fig.savefig(kwargs["filename"], dpi=dpi, format="png")
         else:
             file = StringIO()
