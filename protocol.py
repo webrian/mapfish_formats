@@ -121,7 +121,7 @@ class FormatsProtocol(Protocol):
             Replacing code keys with better understandable keys
             """
             for p in feature.properties.keys():
-                if p in name_mapping:
+                if p in name_mapping and name_mapping[p] != p:
                     feature.properties[name_mapping[p]] = feature.properties[p]
                     del feature.properties[p]
             return feature
