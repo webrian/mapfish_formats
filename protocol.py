@@ -153,8 +153,8 @@ class FormatsProtocol(Protocol):
             row = {}
             for k in attrs:
                 value = getattr(i, k)
-                if name_mapping is not None and k in name_mapping:
-                    k = name_mapping[k]
+                #if name_mapping is not None and k in name_mapping:
+                #    k = name_mapping[k]
 
                 row[k] = value
 
@@ -163,14 +163,18 @@ class FormatsProtocol(Protocol):
                 is_declared = False
                 for f in output['metaData']['fields']:
                     try:
-                        if f['name'] == k:
+                        if f['mapping'] == k:
                             is_declared = True
                     except TypeError:
                         pass
 
                 if not is_declared:
                     metadataField = {}
-                    metadataField['name'] = k
+                    metadataField['mapping'] = k
+                    if name_mapping is not None and k in name_mapping:
+                        metadataField['name'] = name_mapping[k]
+                    else:
+                        metadataField['name'] = k
                     if isinstance(value, (float)):
                         metadataField['type'] = 'float'
                     elif isinstance(value, (int)):
