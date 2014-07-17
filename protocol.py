@@ -24,7 +24,7 @@ import geojson
 from mapfish.protocol import *
 import shapefile
 from shapely.wkb import loads
-import simplejson as json
+import json
 from sqlalchemy import func
 try:
     from cStringIO import StringIO
