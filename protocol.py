@@ -175,7 +175,9 @@ class FormatsProtocol(Protocol):
                         metadataField['name'] = name_mapping[k]
                     else:
                         metadataField['name'] = k
-                    if isinstance(value, (float)):
+                    if isinstance(value, (bool)):
+                        metadataField['type'] = 'boolean'
+                    elif isinstance(value, (float)):
                         metadataField['type'] = 'float'
                     elif isinstance(value, (int)):
                         metadataField['type'] = 'int'
